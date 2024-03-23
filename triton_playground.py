@@ -23,7 +23,7 @@ zeros = (
     .cuda()
 )
 
-arrange = lambda n: torch.arange(n).float().cuda()
+arange = lambda n: torch.arange(n).float().cuda()
 
 rand = lambda *size: torch.rand(*size).float().cuda()
 
@@ -41,15 +41,30 @@ def check(*inputs, prec=1e-4):
 @triton.jit
 def triton_hello_world(X, Y, Z, K: tl.constexpr, L: tl.constexpr):
     Ks = tl.arange(0, K)
-    Ls = tl.arange(0, L)[:, None]
+    Ls = tl.arange(0, L)[:, None]  # add one dimension
     x = tl.load(X + Ks)
     y = tl.load(Y + Ls)
     z = x + y
     tl.store(Z + Ls * K + Ks, z)
 
 
+@triton.jit
+def triton_hello_world_block(X, Y, Z, K: tl.constexpr, L: tl.constexpr):
+    pid = tl.program_id(0)
+    lid = pid * L
+    Ks = tl.arange(0, K)
+    Ls = tl.arange(0, L)[:, None]
+    x = tl.load(X + Ks)
+    y = tl.load(Y + (Ls + lid) * K + Ks)
+    z = x + y
+    tl.store(Z + (Ls + lid) * K + Ks, z)
+
+
 if __name__ == "__main__":
-    x, y = arrange(4), ones(8, 4)
+    x, y = arange(4), ones(8, 4)
     z = zeros(8, 4)
+    print(f"x: {x} \ny: {y}\n z: {z}")
     triton_hello_world[(1,)](x, y, z, 4, 8)
+    print(z)
+    triton_hello_world_block[(1,)](x, y, z, 4, 2)
     print(z)
