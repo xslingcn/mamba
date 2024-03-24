@@ -153,11 +153,77 @@ def cumsum_block(x, y, K):
     _BLOCKS = seqlen // K
     h = zeros(2, _BLOCKS)
     cumsum_tt[(_BLOCKS,)](x, h[0], y, h[0], K)
+    # preparing initial values
     h[1, 1:] = h[0].cumsum(0)[:-1]  # ?? using torch cumsum
-    # slicing understanding: h[1][1...len] = h[0].cumsum()[0...len-1]
+    # slicing understanding: h[1][1...len] = h[0].cumsum(0)[0...len-1]
     cumsum_tt[(_BLOCKS,)](x, h[1], y, h[1], K)
 
 
 cumsum_block(x, y, K)
 h_, y_ = cumsum(x.tolist())
 check(y, y_)
+
+# EMA: h(k)=α h(k−1)+(1−α)x(k)
+#      y(k) = h(k)
+alpha = 0.9
+
+
+def ema(x, alpha):
+    y = []
+    h = 0
+    for xi in x:
+        h = alpha * h + (1 - alpha) * xi
+        y.append(h)
+    return h, y
+
+
+x = arange(SEQLEN)
+h_, y_ = ema(x.tolist(), alpha)
+
+
+# Discrete-time state-space model scan (SSM):
+# EMA allowing for variable coefficients
+#       h(k) = a h(k−1) + b x(k)
+#       y(k) = c h(k)
+# A "dynamic-forgetting EMA"
+def ssm_scan(x, a, b, c):
+    y = []
+    h = 0
+    for xi in x:
+        h = a * h + b * xi
+        y.append(c * h)
+    return h, y
+
+
+h_, y_ = ssm_scan(x.tolist(), alpha, 1 - alpha, 1)
+
+
+# Want to make SSM discrete
+def op(a, b):
+    return (a[0] * b[0], b[0] * a[1] + b[1])
+
+
+"""
+It 0:
+    h = alpha * a, b * x[0] ~ h[0]
+    y = c * h[0]
+It 1:
+    h = alpha * a * a, a * h[0] + b * x[1] ~ h[1]
+    y = c * h[1]
+It 2:
+    h = alpha * a * a * a, a * h[1] + b * x[2] ~ h[2]
+    y = c * h[2]
+"""
+
+
+def ssm_associative(x, a, b, c):
+    y = []
+    h = (alpha, 0)
+    for k in range(len(x)):
+        h_new = (a, b * x[k])
+        h = op(h, h_new)
+        y.append(c * h[1])
+    return h, torch.stack(y)
+
+
+assert ema(x, alpha)[0] == ssm_associative(x, alpha, 1 - alpha, 1)[0][1]
