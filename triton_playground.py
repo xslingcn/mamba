@@ -1,41 +1,7 @@
 import triton
 import triton.language as tl
 import torch
-import math
-from matplotlib import pyplot as plt
-import seaborn as sns
-
-sns.set_theme(rc={"figure.figsize": (10, 4)})
-sns.set_style("whitegrid", {"axes.grid": False})
-ones = (
-    lambda *size: torch.ones(
-        *size,
-    )
-    .float()
-    .cuda()
-)
-
-zeros = (
-    lambda *size: torch.zeros(
-        *size,
-    )
-    .float()
-    .cuda()
-)
-
-arange = lambda n: torch.arange(n).float().cuda()
-
-rand = lambda *size: torch.rand(*size).float().cuda()
-
-
-def check(*inputs, prec=1e-4):
-    for i, (a, b) in enumerate(zip(inputs[::2], inputs[1::2])):
-        if isinstance(b, list):
-            b = torch.tensor(b)
-        c = torch.allclose(a.cpu(), b.cpu(), prec)
-        c1 = torch.isclose(a.cpu(), b.cpu(), prec)
-        assert c, f"check {i} failed, {a} \n {b} \n {c1}"
-    print("Pass")
+from utils import *
 
 
 @triton.jit
@@ -114,9 +80,6 @@ def comsum_tt(X, Y, H, K: tl.constexpr):
     tl.store(H + Ks * 0, hs, mask=Ks == (K - 1))
 
 
-K = 16
-BLOCKS = 8
-SEQLEN = K * BLOCKS
 x = arange(SEQLEN)
 y = zeros(SEQLEN)
 h = zeros(1)
@@ -162,68 +125,3 @@ def cumsum_block(x, y, K):
 cumsum_block(x, y, K)
 h_, y_ = cumsum(x.tolist())
 check(y, y_)
-
-# EMA: h(k)=α h(k−1)+(1−α)x(k)
-#      y(k) = h(k)
-alpha = 0.9
-
-
-def ema(x, alpha):
-    y = []
-    h = 0
-    for xi in x:
-        h = alpha * h + (1 - alpha) * xi
-        y.append(h)
-    return h, y
-
-
-x = arange(SEQLEN)
-h_, y_ = ema(x.tolist(), alpha)
-
-
-# Discrete-time state-space model scan (SSM):
-# EMA allowing for variable coefficients
-#       h(k) = a h(k−1) + b x(k)
-#       y(k) = c h(k)
-# A "dynamic-forgetting EMA"
-def ssm_scan(x, a, b, c):
-    y = []
-    h = 0
-    for xi in x:
-        h = a * h + b * xi
-        y.append(c * h)
-    return h, y
-
-
-h_, y_ = ssm_scan(x.tolist(), alpha, 1 - alpha, 1)
-
-
-# Want to make SSM discrete
-def op(a, b):
-    return (a[0] * b[0], b[0] * a[1] + b[1])
-
-
-"""
-It 0:
-    h = alpha * a, b * x[0] ~ h[0]
-    y = c * h[0]
-It 1:
-    h = alpha * a * a, a * h[0] + b * x[1] ~ h[1]
-    y = c * h[1]
-It 2:
-    h = alpha * a * a * a, a * h[1] + b * x[2] ~ h[2]
-    y = c * h[2]
-"""
-
-
-def ssm_associative(x, a, b, c):
-    y = []
-    h = (alpha, 0)
-    for k in range(len(x)):
-        h_new = (a, b * x[k])
-        h = op(h, h_new)
-        y.append(c * h[1])
-    return h, torch.stack(y)
-
-
-assert ema(x, alpha)[0] == ssm_associative(x, alpha, 1 - alpha, 1)[0][1]
